@@ -1,0 +1,7 @@
+test/
+train/
+validation/
+
+test.tar
+train.tar
+validation.tar
