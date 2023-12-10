@@ -15,6 +15,7 @@ from sklearn.metrics import confusion_matrix
 import torch.nn.functional as F
 from matrix import *
 
+import datetime
 
 def Entropy(input_):
     bs = input_.size(0)
@@ -170,15 +171,23 @@ def train_target(args):
     netB = network.feat_bootleneck(type=args.classifier,
                                    feature_dim=netF.in_features,
                                    bottleneck_dim=args.bottleneck).cuda()
-    netC = network.feat_classifier(type=args.layer,
-                                   class_num=args.class_num,
-                                   bottleneck_dim=args.bottleneck).cuda()
+    if args.bada:
+        netC = network.BayesianFeatClassifier(class_num = args.class_num,
+                                              bottleneck_dim=args.bottleneck,
+                                              dropout_rate=0.1).cuda()
+    else:
+        netC = network.feat_classifier(type=args.layer,
+                                       class_num=args.class_num,
+                                       bottleneck_dim=args.bottleneck).cuda()
 
     modelpath = args.output_dir_src + '/source_F.pt'
     netF.load_state_dict(torch.load(modelpath))
     modelpath = args.output_dir_src + '/source_B.pt'
     netB.load_state_dict(torch.load(modelpath))
-    modelpath = args.output_dir_src + '/source_C.pt'
+    if args.bada:
+        modelpath = args.output_dir_src + '/source_E.pt'
+    else:
+        modelpath = args.output_dir_src + '/source_C.pt'
     netC.load_state_dict(torch.load(modelpath))
     print("load complete")
 
@@ -356,6 +365,7 @@ if __name__ == "__main__":
     parser.add_argument('--end', default=0.5, type=float)
     parser.add_argument('--ps', default=0, type=int)
     parser.add_argument('--ran', default=0, type=int)
+    parser.add_argument('--bada', default=1, type=int)
     args = parser.parse_args()
     print("="*100)
     print("PS={}, end={}, K={}, M={}, ran={}".\
@@ -372,6 +382,8 @@ if __name__ == "__main__":
     random.seed(SEED)
     torch.backends.cudnn.deterministic = True
 
+    now = datetime.datetime.now()
+
     for i in range(len(names)):
         if i == args.s:
             continue
@@ -383,7 +395,7 @@ if __name__ == "__main__":
         args.test_dset_path = folder + names[args.t] + '_list.txt'
 
         args.output_dir_src = osp.join(args.output_src, args.da, names[args.s])
-        args.output_dir = osp.join(args.output, args.da, names[args.s] + '2' + names[args.t])
+        args.output_dir = osp.join(args.output, args.da, names[args.s] + '2' + names[args.t] + "_" + now.strftime("%m%d_%H%M"))
         args.name = names[args.s] + '2' + names[args.t]
 
         if not os.path.exists(args.output_dir):

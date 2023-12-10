@@ -5,6 +5,9 @@ import numpy as np
 from scipy.spatial.distance import cdist
 import random
 
+from torch import Tensor
+from torch.nn.functional import log_softmax
+import math
 
 already_labeled_idx = []
 
@@ -14,6 +17,118 @@ def KL(p, q):
     return: shape(btz, x)
     '''
     return (p*torch.log(p/q)).sum(-1)
+
+############################### epig ###############################
+
+def logmeanexp(x: Tensor, dim: int, keepdim: bool = False) -> Tensor:
+    """
+    Arguments:
+        x: Tensor[float]
+        dim: int
+        keepdim: bool
+
+    Returns:
+        Tensor[float]
+    """
+    return torch.logsumexp(x, dim=dim, keepdim=keepdim) - math.log(x.shape[dim])
+
+def conditional_predict(
+        model, inputs: Tensor, num_classes:int, n_model_samples=500
+    ) -> Tensor:
+    """
+    Arguments:
+        model: netEPIG (bnn)
+        inputs: Tensor[float], [N, ...]
+        n_model_samples: int
+    Returns:
+        Tensor[float], [N, K, Cl]
+    """
+    n_input = len(inputs)
+    # outputs = model(inputs, n_model_samples)  # [N, K, Cl]
+    outputs = torch.zeros(n_input, n_model_samples, num_classes)
+    for i in range(n_input):
+        for j in range(n_model_samples):
+            model_output = model(inputs[i].unsqueeze(0), apply_dropout=True)
+            outputs[i, j] = model_output.squeeze(0)  # Remove the batch dimension
+    return log_softmax(outputs, dim=-1)  # [N, K, Cl]
+
+
+def conditional_epig_from_logprobs(logprobs_pool: Tensor, logprobs_targ: Tensor) -> Tensor:
+    """
+    EPIG(x|x_*) = I(y;y_*|x,x_*)
+                = KL[p(y,y_*|x,x_*) || p(y|x)p(y_*|x_*)]
+                = ∑_{y} ∑_{y_*} p(y,y_*|x,x_*) log(p(y,y_*|x,x_*) / p(y|x)p(y_*|x_*))
+
+    Arguments:
+        logprobs_pool: Tensor[float], [N_p, K, Cl]
+        logprobs_targ: Tensor[float], [N_t, K, Cl]
+
+    Returns:
+        Tensor[float], [N_p, N_t]
+    """
+    # Estimate the log of the joint predictive distribution.
+    logprobs_pool = logprobs_pool.permute(1, 0, 2)  # [K, N_p, Cl]
+    logprobs_targ = logprobs_targ.permute(1, 0, 2)  # [K, N_t, Cl]
+    logprobs_pool = logprobs_pool[:, :, None, :, None]  # [K, N_p, 1, Cl, 1]
+    logprobs_targ = logprobs_targ[:, None, :, None, :]  # [K, 1, N_t, 1, Cl]
+    logprobs_pool_targ_joint = logprobs_pool + logprobs_targ  # [K, N_p, N_t, Cl, Cl]
+    logprobs_pool_targ_joint = logmeanexp(logprobs_pool_targ_joint, dim=0)  # [N_p, N_t, Cl, Cl]
+
+    # Estimate the log of the marginal predictive distributions.
+    logprobs_pool = logmeanexp(logprobs_pool, dim=0)  # [N_p, 1, Cl, 1]
+    logprobs_targ = logmeanexp(logprobs_targ, dim=0)  # [1, N_t, 1, Cl]
+
+    # Estimate the log of the product of the marginal predictive distributions.
+    logprobs_pool_targ_joint_indep = logprobs_pool + logprobs_targ  # [N_p, N_t, Cl, Cl]
+
+    # Estimate the conditional expected predictive information gain for each pair of examples.
+    # This is the KL divergence between probs_pool_targ_joint and probs_pool_targ_joint_indep.
+    probs_pool_targ_joint = torch.exp(logprobs_pool_targ_joint)  # [N_p, N_t, Cl, Cl]
+    log_term = logprobs_pool_targ_joint - logprobs_pool_targ_joint_indep  # [N_p, N_t, Cl, Cl]
+    scores = torch.sum(probs_pool_targ_joint * log_term, dim=(-2, -1))  # [N_p, N_t]
+    return scores  # [N_p, N_t]
+
+def epig_from_conditional_scores(scores: Tensor) -> Tensor:
+    """
+    Arguments:
+        scores: Tensor[float], [N_p, N_t]
+
+    Returns:
+        Tensor[float], [N_p,]
+    """
+    scores = torch.mean(scores, dim=-1)  # [N_p,]
+    # scores = check(scores, score_type="EPIG")  # [N_p,]
+    return scores  # [N_p,]
+    
+def epig_from_logprobs(logprobs_pool: Tensor, logprobs_targ: Tensor) -> Tensor:
+    """
+    EPIG(x) = I(y;x_*,y_*|x)
+            = E_{p_*(x_*)}[I(y;y_*|x,x_*)]
+            = E_{p_*(x_*)}[EPIG(x|x_*)]
+
+    Arguments:
+        logprobs_pool: Tensor[float], [N_p, K, Cl]
+        logprobs_targ: Tensor[float], [N_t, K, Cl]
+
+    Returns:
+        Tensor[float], [N_p,]
+    """
+    scores = conditional_epig_from_logprobs(logprobs_pool, logprobs_targ)  # [N_p, N_t]
+    return epig_from_conditional_scores(scores)  # [N_p,]
+
+def estimate_epig(feature_pool, feature_target, netEPIG, num_class):
+    """Returns a epig_scores
+    
+    """
+    n_samples_test = 500
+    netEPIG.eval()
+    combined_inputs = torch.cat((feature_pool, feature_target))  # [N + N_t, ...]
+    logprobs = conditional_predict(
+        netEPIG, combined_inputs, num_class, n_samples_test
+    )  # [N + N_t, K, Cl]
+    return epig_from_logprobs(logprobs[: len(feature_pool)], logprobs[len(feature_target) :])  # [N,]
+
+####################################################################
 
 
 def obtain_label(loader, netF, netB, netC, args, label_cnt=0, percen=0.5, last=0, sim_bank=[]):
@@ -84,7 +199,22 @@ def obtain_label(loader, netF, netB, netC, args, label_cnt=0, percen=0.5, last=0
     # label samples with HIGHEST energy && previously unlabeled
     sorted_idx_list = []
     selected_cnt, cur_idx, pre_lbl = 0, 0, 0
-    if not args.ran:
+
+    # estimate_epig
+    ori_epig_sorted_idx_list = estimate_epig(all_fea, all_fea, netC, num_class=args.class_num).tolist()
+
+    if args.bada:
+        print("sample using bada")
+        while selected_cnt < label_cnt and cur_idx < len(ori_epig_sorted_idx_list):
+            now = ori_epig_sorted_idx_list[cur_idx]
+            if now not in already_labeled_idx:
+                sorted_idx_list.append(now)
+                already_labeled_idx.append(now)
+                selected_cnt += 1
+            else:
+                pre_lbl += 1  # previously labeled
+            cur_idx += 1
+    elif not args.ran:
         while selected_cnt < label_cnt and cur_idx < len(ori_sorted_idx_list):
             now = ori_sorted_idx_list[cur_idx]
             if now not in already_labeled_idx:

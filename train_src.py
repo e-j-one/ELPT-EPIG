@@ -14,6 +14,8 @@ import random, pdb, math, copy
 from loss import CrossEntropyLabelSmooth
 from sklearn.metrics import confusion_matrix
 
+import datetime
+
 
 def Entropy(input_):
     bs = input_.size(0)
@@ -129,8 +131,13 @@ def train_source(args):
     netF = network.ResBase(res_name=args.net).cuda()
 
     netB = network.feat_bootleneck(type=args.classifier, feature_dim=netF.in_features, bottleneck_dim=args.bottleneck).cuda()
-    netC = network.feat_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
-
+    if args.bada:
+        netC = network.BayesianFeatClassifier(class_num = args.class_num,
+                                          bottleneck_dim=args.bottleneck,
+                                          dropout_rate=0.1).cuda()
+    else:
+        netC = network.feat_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
+        
     param_group = []
     learning_rate = args.lr
     for k, v in netF.named_parameters():
@@ -188,7 +195,10 @@ def train_source(args):
             best_netC = netC.state_dict()
             torch.save(best_netF, osp.join(args.output_dir_src, "source_F.pt"))
             torch.save(best_netB, osp.join(args.output_dir_src, "source_B.pt"))
-            torch.save(best_netC, osp.join(args.output_dir_src, "source_C.pt"))
+            if args.bada:
+                torch.save(best_netC, osp.join(args.output_dir_src, "source_E.pt"))
+            else:
+                torch.save(best_netC, osp.join(args.output_dir_src, "source_C.pt"))
 
         netF.train()
         netB.train()
@@ -206,8 +216,10 @@ def train_source(args):
 
     torch.save(best_netF, osp.join(args.output_dir_src, "source_F.pt"))
     torch.save(best_netB, osp.join(args.output_dir_src, "source_B.pt"))
-    torch.save(best_netC, osp.join(args.output_dir_src, "source_C.pt"))
-
+    if args.bada:
+        torch.save(best_netC, osp.join(args.output_dir_src, "source_E.pt"))
+    else:
+        torch.save(best_netC, osp.join(args.output_dir_src, "source_C.pt"))
     return netF, netB, netC
 
 
@@ -216,13 +228,20 @@ def test_target(args):
     ## set base network
     netF = network.ResBase(res_name=args.net).cuda()
     netB = network.feat_bootleneck(type=args.classifier, feature_dim=netF.in_features, bottleneck_dim=args.bottleneck).cuda()
-    netC = network.feat_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
-
+    if args.bada:
+        netC = network.BayesianFeatClassifier(class_num = args.class_num,
+                                          bottleneck_dim=args.bottleneck,
+                                          dropout_rate=0.1).cuda()
+    else:
+        netC = network.feat_classifier(type=args.layer, class_num = args.class_num, bottleneck_dim=args.bottleneck).cuda()
     args.modelpath = args.output_dir_src + '/source_F.pt'
     netF.load_state_dict(torch.load(args.modelpath))
     args.modelpath = args.output_dir_src + '/source_B.pt'
     netB.load_state_dict(torch.load(args.modelpath))
-    args.modelpath = args.output_dir_src + '/source_C.pt'
+    if args.bada:
+        args.modelpath = args.output_dir_src + '/source_E.pt'
+    else:
+        args.modelpath = args.output_dir_src + '/source_C.pt'
     netC.load_state_dict(torch.load(args.modelpath))
     netF.eval()
     netB.eval()
@@ -262,6 +281,7 @@ if __name__ == "__main__":
     parser.add_argument('--output', type=str, default='weight')
     parser.add_argument('--da', type=str, default='uda')
     parser.add_argument('--trte', type=str, default='val', choices=['full', 'val'])
+    parser.add_argument('--bada', default=1, type=int)
     args = parser.parse_args()
 
     names = ['train', 'validation']
@@ -274,12 +294,14 @@ if __name__ == "__main__":
     np.random.seed(SEED)
     random.seed(SEED)
 
+    now = datetime.datetime.now()
+
     folder = './data/'
     args.s_dset_path = folder + names[args.s] + '_list.txt'
     args.test_dset_path = folder + names[args.t] + '_list.txt'
 
     args.name_src = names[args.s] 
-    args.output_dir_src = osp.join(args.output, args.da, args.name_src)
+    args.output_dir_src = osp.join(args.output, args.da, args.name_src + "_" + now.strftime("%m%d_%H%M"))
 
     if not os.path.exists(args.output_dir_src):
         os.makedirs(args.output_dir_src)

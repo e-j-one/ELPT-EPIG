@@ -1,12 +1,14 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 from torchvision import models
 from torch.autograd import Variable
 import math
 import torch.nn.utils.weight_norm as weightNorm
 from collections import OrderedDict
+
 
 def calc_coeff(iter_num, high=1.0, low=0.0, alpha=10.0, max_iter=10000.0):
     return np.float(2.0 * (high - low) / (1.0 + np.exp(-alpha*iter_num / max_iter)) - (high - low) + low)
@@ -90,5 +92,24 @@ class feat_classifier(nn.Module):
             self.fc.apply(init_weights)
 
     def forward(self, x):
+        x = self.fc(x)
+        return x
+
+def init_weights(m):
+    if type(m) == nn.Linear:
+        torch.nn.init.xavier_uniform_(m.weight)
+        m.bias.data.fill_(0.01)
+
+class BayesianFeatClassifier(nn.Module):
+    def __init__(self, class_num, bottleneck_dim=256, dropout_rate=0.5):
+        super(BayesianFeatClassifier, self).__init__()
+        
+        self.fc = nn.Linear(bottleneck_dim, class_num)
+        self.fc.apply(init_weights)
+        self.dropout = nn.Dropout(p=dropout_rate)
+
+    def forward(self, x, apply_dropout=False):
+        if apply_dropout:
+            x = self.dropout(x)
         x = self.fc(x)
         return x
