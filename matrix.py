@@ -47,6 +47,8 @@ def conditional_predict(
     # outputs = model(inputs, n_model_samples)  # [N, K, Cl]
     outputs = torch.zeros(n_input, n_model_samples, num_classes)
     for i in range(n_input):
+        # if i%10000 == 0:
+        #     print(f"conditional_predict: {i}/{n_input}")
         for j in range(n_model_samples):
             model_output = model(inputs[i].unsqueeze(0), apply_dropout=True)
             outputs[i, j] = model_output.squeeze(0)  # Remove the batch dimension
@@ -66,6 +68,9 @@ def conditional_epig_from_logprobs(logprobs_pool: Tensor, logprobs_targ: Tensor)
     Returns:
         Tensor[float], [N_p, N_t]
     """
+    # print("conditional_epig_from_logprobs")
+    # print("logprobs_pool: ", logprobs_pool.shape)
+    # print("logprobs_targ: ", logprobs_targ.shape)
     # Estimate the log of the joint predictive distribution.
     logprobs_pool = logprobs_pool.permute(1, 0, 2)  # [K, N_p, Cl]
     logprobs_targ = logprobs_targ.permute(1, 0, 2)  # [K, N_t, Cl]
@@ -120,17 +125,17 @@ def estimate_epig(feature_pool, feature_target, netEPIG, num_class):
     """Returns a epig_scores
     
     """
-    n_samples_test = 500
+    n_samples_test = 4
     
-    print("estimate_epig: feature_pool:", type(feature_pool), feature_pool.shape)
-    print("estimate_epig: feature_target:", type(feature_target), feature_target.shape)
+    # print("estimate_epig: feature_pool:", type(feature_pool), feature_pool.shape)
+    # print("estimate_epig: feature_target:", type(feature_target), feature_target.shape)
     if isinstance(feature_pool, np.ndarray):
         feature_pool = torch.from_numpy(feature_pool).cuda()
 
     if isinstance(feature_target, np.ndarray):
         feature_target = torch.from_numpy(feature_target).cuda()
-    print("estimate_epig: feature_pool:", type(feature_pool), feature_pool.shape)
-    print("estimate_epig: feature_target:", type(feature_target), feature_target.shape)
+    # print("estimate_epig: feature_pool:", type(feature_pool), feature_pool.shape)
+    # print("estimate_epig: feature_target:", type(feature_target), feature_target.shape)
 
     netEPIG.eval()
     
@@ -158,12 +163,14 @@ def obtain_label(loader, netF, netB, netC, args, label_cnt=0, percen=0.5, last=0
             outputs_eng = -torch.logsumexp(outputs, 1)
             if start_test:
                 all_fea = feas.float().cpu()
+                all_e_fea = feas.float().cpu()
                 all_output = outputs.float().cpu()
                 all_label = labels.float()
                 all_eng = outputs_eng.cpu()
                 start_test = False
             else:
                 all_fea = torch.cat((all_fea, feas.float().cpu()), 0)
+                all_e_fea = torch.cat((all_e_fea, feas.float().cpu()), 0)
                 all_output = torch.cat((all_output, outputs.float().cpu()), 0)
                 all_label = torch.cat((all_label, labels.float()), 0)
                 all_eng = torch.cat((all_eng, outputs_eng.cpu()), 0)
@@ -172,8 +179,11 @@ def obtain_label(loader, netF, netB, netC, args, label_cnt=0, percen=0.5, last=0
     _, predict = torch.max(all_output, 1)
 
     accuracy = torch.sum(torch.squeeze(predict).float() == all_label).item() / float(all_label.size()[0])
+    # print("all_feat 1:", all_fea.shape)
     all_fea = torch.cat((all_fea, torch.ones(all_fea.size(0), 1)), 1)
+    # print("all_feat 2:", all_fea.shape)
     all_fea = (all_fea.t() / torch.norm(all_fea, p=2, dim=1)).t()
+    # print("all_feat 3:", all_fea.shape)
 
     all_fea = all_fea.float().cpu().numpy()
     K = all_output.size(1)
@@ -213,8 +223,28 @@ def obtain_label(loader, netF, netB, netC, args, label_cnt=0, percen=0.5, last=0
     selected_cnt, cur_idx, pre_lbl = 0, 0, 0
 
     # estimate_epig
-    ori_epig_sorted_idx_list = estimate_epig(all_fea, all_fea, netC, num_class=args.class_num).tolist()
+    # all_e_fea_pool = all_e_fea[:600].clone().cuda()
+    # all_e_fea_target = all_e_fea[:100].clone().cuda()
+    # epig_scores = estimate_epig(all_e_fea_pool, all_e_fea_target, netC, num_class=args.class_num).tolist()
+    # ori_epig_sorted_idx_list = []
+    epig_scores = []
 
+    all_e_fea_target = all_e_fea[:1000].clone().cuda()
+    
+    for i in range(0, all_e_fea.size(0), 100):
+        end_idx = min(i + 100, all_e_fea.size(0))
+        all_e_fea_pool = all_e_fea[i:end_idx].clone().cuda()
+    
+        epig_scores = epig_scores + estimate_epig(all_e_fea_pool, all_e_fea_target, netC, num_class=args.class_num).tolist()
+
+        # Break if we have reached the end of the tensor
+        if end_idx == all_e_fea.size(0):
+            break
+
+    ori_epig_sorted_idx_list = [index for index, epig_score in sorted(enumerate(epig_scores), key=lambda x: x[1], reverse=True)]
+
+
+    # print("ori_epig_sorted_idx_list", ori_epig_sorted_idx_list)
     if args.bada:
         print("sample using bada")
         while selected_cnt < label_cnt and cur_idx < len(ori_epig_sorted_idx_list):
@@ -244,7 +274,7 @@ def obtain_label(loader, netF, netB, netC, args, label_cnt=0, percen=0.5, last=0
                 sorted_idx_list.append(idx)
                 already_labeled_idx.append(idx)
                 selected_cnt += 1
-    
+    # print("sorted_idx_list", sorted_idx_list)
     eng_weight = torch.ones(len(all_eng)).unsqueeze(1)
     eng_weight = np.array(eng_weight)
     for i in range(len(eng_weight)):
