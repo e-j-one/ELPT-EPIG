@@ -121,7 +121,19 @@ def estimate_epig(feature_pool, feature_target, netEPIG, num_class):
     
     """
     n_samples_test = 500
+    
+    print("estimate_epig: feature_pool:", type(feature_pool), feature_pool.shape)
+    print("estimate_epig: feature_target:", type(feature_target), feature_target.shape)
+    if isinstance(feature_pool, np.ndarray):
+        feature_pool = torch.from_numpy(feature_pool).cuda()
+
+    if isinstance(feature_target, np.ndarray):
+        feature_target = torch.from_numpy(feature_target).cuda()
+    print("estimate_epig: feature_pool:", type(feature_pool), feature_pool.shape)
+    print("estimate_epig: feature_target:", type(feature_target), feature_target.shape)
+
     netEPIG.eval()
+    
     combined_inputs = torch.cat((feature_pool, feature_target))  # [N + N_t, ...]
     logprobs = conditional_predict(
         netEPIG, combined_inputs, num_class, n_samples_test
