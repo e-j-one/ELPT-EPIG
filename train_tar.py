@@ -368,8 +368,8 @@ if __name__ == "__main__":
     parser.add_argument('--bada', default=1, type=int)
     args = parser.parse_args()
     print("="*100)
-    print("PS={}, end={}, K={}, M={}, ran={}".\
-        format(args.ps, args.end, args.K, args.M, args.ran))
+    print("PS={}, end={}, K={}, M={}, ran={} BADA={}".\
+        format(args.ps, args.end, args.K, args.M, args.ran, args.bada))
 
     names = ['train', 'validation']
     args.class_num = 12
