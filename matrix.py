@@ -227,25 +227,21 @@ def obtain_label(loader, netF, netB, netC, args, label_cnt=0, percen=0.5, last=0
     # all_e_fea_target = all_e_fea[:100].clone().cuda()
     # epig_scores = estimate_epig(all_e_fea_pool, all_e_fea_target, netC, num_class=args.class_num).tolist()
     # ori_epig_sorted_idx_list = []
-    epig_scores = []
 
-    all_e_fea_target = all_e_fea[:1000].clone().cuda()
-    
-    for i in range(0, all_e_fea.size(0), 100):
-        end_idx = min(i + 100, all_e_fea.size(0))
-        all_e_fea_pool = all_e_fea[i:end_idx].clone().cuda()
-    
-        epig_scores = epig_scores + estimate_epig(all_e_fea_pool, all_e_fea_target, netC, num_class=args.class_num).tolist()
-
-        # Break if we have reached the end of the tensor
-        if end_idx == all_e_fea.size(0):
-            break
-
-    ori_epig_sorted_idx_list = [index for index, epig_score in sorted(enumerate(epig_scores), key=lambda x: x[1], reverse=True)]
-
+    if args.bada:
+        epig_scores = []
+        all_e_fea_target = all_e_fea[:10000].clone().cuda()
+        for i in range(0, all_e_fea.size(0), 100):
+            end_idx = min(i + 100, all_e_fea.size(0))
+            all_e_fea_pool = all_e_fea[i:end_idx].clone().cuda()
+            epig_scores = epig_scores + estimate_epig(all_e_fea_pool, all_e_fea_target, netC, num_class=args.class_num).tolist()
+            # Break if we have reached the end of the tensor
+            if end_idx == all_e_fea.size(0):
+                break
+        ori_epig_sorted_idx_list = [index for index, epig_score in sorted(enumerate(epig_scores), key=lambda x: x[1], reverse=True)]
 
     # print("ori_epig_sorted_idx_list", ori_epig_sorted_idx_list)
-    if args.bada:
+    if args.bada and not args.ran:
         print("sample using bada")
         while selected_cnt < label_cnt and cur_idx < len(ori_epig_sorted_idx_list):
             now = ori_epig_sorted_idx_list[cur_idx]
@@ -267,6 +263,7 @@ def obtain_label(loader, netF, netB, netC, args, label_cnt=0, percen=0.5, last=0
                 pre_lbl += 1  # previously labeled
             cur_idx += 1
     else:
+        print("random labeling")
         # randomly select
         while selected_cnt < label_cnt:
             idx = random.choice(idx_list)
